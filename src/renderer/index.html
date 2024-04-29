@@ -11,7 +11,20 @@
   </head>
 
   <body>
+    <div class="titlebar"></div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
+  <style>
+    * {
+      user-select: none;
+    }
+    .titlebar {
+      height: 30px;
+      width: 100%;
+      -webkit-user-select: none;
+      -webkit-app-region: drag;
+      position: fixed;
+    }
+  </style>
 </html>

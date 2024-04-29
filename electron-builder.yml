@@ -14,6 +14,8 @@ afterSign: build/notarize.js
 win:
   executableName: DARN OS Updater
   requestedExecutionLevel: requireAdministrator
+  publish:
+    - github
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

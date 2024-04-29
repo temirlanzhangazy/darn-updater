@@ -2,11 +2,15 @@
 <!-- eslint-disable @typescript-eslint/no-explicit-any -->
 <template>
   <div class="main-content">
-    <img alt="Vue logo" src="./assets/darn-logo-white.svg" width="150" />
+    <img alt="Vue logo" src="./assets/darn-logo-white.svg" width="150" draggable="false"/>
     <div class="sizedbox h-50"></div>
     <div class="inner-content">
       <div class="ic-row">
-        <span>Текущая версия:</span>
+        <span>Версия установщика:</span>
+        <el-tag type="info">{{ ui_state.versionData.updaterVersion ?? 'Загрузка...' }}</el-tag>
+      </div>
+      <div class="ic-row">
+        <span>Версия DARN OS:</span>
         <el-tag v-if="ui_state.status == UpdaterStatus.Loading" type="warning">Загрузка...</el-tag>
         <el-tag v-else-if="ui_state.status == UpdaterStatus.UpToDate" type="success"
           >Последняя версия</el-tag
@@ -20,17 +24,21 @@
       </div>
       <div class="ic-row">
         <span>Файлы конфигураций:</span>
+        <el-tag v-if="ui_state.errors" type="danger"
+          >Ошибки</el-tag
+        >
         <el-tag v-if="ui_state.configFileStatus == UpdaterStatus.Loading" type="warning"
           >Загрузка...</el-tag
         >
-        <el-tag v-else-if="ui_state.configFileStatus == UpdaterStatus.UpToDate" type="success"
+        <el-tag v-else-if="ui_state.configFileStatus == UpdaterStatus.UpToDate && !ui_state.errors" type="success"
           >В порядке</el-tag
         >
         <el-tag v-else-if="ui_state.configFileStatus == UpdaterStatus.ReadyToUpdate" type="danger"
-          >Не установено</el-tag
+        >Не установено</el-tag
         >
       </div>
       <div class="sizedbox"></div>
+      <span v-if="ui_state.errors" class="darn-warning">Произошла ошибка во время установки DARN. <br/>Убедитесь что Вы запустили установщик от имени администратора, <br/>или обратитесь в службу поддержки.</span>
       <el-upload drag :auto-upload="false" :limit="1" accept=".darnkey" @change="darnKeyInserted">
         <template v-if="!ui_state.keyPath">
           <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
@@ -51,11 +59,19 @@
           <div class="el-upload__tip">файл .darnkey</div>
         </template>
       </el-upload>
-      <div v-if="ui_state.download.progress > 0" class="ic-col">
+      <div v-if="ui_state.download.progress > 0 && !ui_state.errors" class="ic-col">
         <span>{{
           ui_state.download.progress >= 100 ? 'Установка завершена.' : 'Идет установка...'
         }}</span>
+        
         <el-progress
+          v-if="ui_state.download.updaterUpdateProgress != null"
+          type="circle"
+          :percentage="ui_state.download.updaterUpdateProgress.toFixed()"
+          :status="ui_state.download.updaterUpdateProgress >= 100 ? 'success' : ''"
+        />
+        <el-progress
+          v-else
           type="circle"
           :percentage="ui_state.download.progress.toFixed()"
           :status="ui_state.download.progress >= 100 ? 'success' : ''"
@@ -69,7 +85,7 @@
         (ui_state.status != UpdaterStatus.ReadyToUpdate &&
           ui_state.status != UpdaterStatus.NotInstalled) ||
         ui_state.keyPath == '' ||
-        ui_state.keyPath == null
+        ui_state.keyPath == null || ui_state.download.updaterUpdateProgress != null
       "
       :icon="UploadFilled"
       >Установить</el-button
@@ -80,14 +96,14 @@
         (ui_state.status != UpdaterStatus.ReadyToUpdate &&
           ui_state.status != UpdaterStatus.UpToDate) ||
         ui_state.keyPath == '' ||
-        ui_state.keyPath == null
+        ui_state.keyPath == null || ui_state.download.updaterUpdateProgress != null
       "
       :icon="FirstAidKit"
       text
       >Исправить</el-button
     >
   </div>
-  <el-link class="politics">Политика конфиденциальности и публичная оферта</el-link>
+  <el-link class="politics" @click="openPolicies">Политика конфиденциальности и публичная оферта</el-link>
 </template>
 
 <script lang="ts" setup>
@@ -105,24 +121,40 @@ interface ui_state_interface {
   status: UpdaterStatus
   configFileStatus: UpdaterStatus
   keyPath: string
+  updatedKey: boolean
   versionData: {
     version: [number, number]
-    download_url: string
+    serviceVersion: number,
+    helperVersion: number,
+    updaterVersion: String | null,
+    download_url: string,
+    service_download_url: string,
+    helper_download_url: string,
   }
+  errors: boolean,
   download: {
-    progress: number
+    progress: number,
+    updaterUpdateProgress: number | null,
   }
 }
 const ui_state = ref<ui_state_interface>({
   status: UpdaterStatus.Loading,
   configFileStatus: UpdaterStatus.Loading,
   keyPath: '',
+  errors: false,
+  updatedKey: false,
   versionData: {
+    version: [0, 0],
+    serviceVersion: 0,
+    helperVersion: 0,
+    updaterVersion: null,
     download_url: '',
-    version: [0, 0]
+    service_download_url: '',
+    helper_download_url: '',
   },
   download: {
-    progress: 0
+    progress: 0,
+    updaterUpdateProgress: null,
   }
 })
 class AxiosResponse {
@@ -136,6 +168,7 @@ class AxiosResponse {
   }
 }
 onMounted(async () => {
+  ui_state.value.versionData.updaterVersion = await window.electron.ipcRenderer.invoke('getAppVersion');
   const response: AxiosResponse = await window.api.getQuery(
     'https://auth.darn.webspark.kz/api/checkVersion.php',
     {}
@@ -145,10 +178,13 @@ onMounted(async () => {
     return
   }
   ui_state.value.status = UpdaterStatus.Loading
-  ui_state.value.versionData = {
-    version: response.data.version,
-    download_url: response.data.download_url
-  }
+  ui_state.value.versionData.version = response.data.version;
+  ui_state.value.versionData.serviceVersion = response.data.serviceVersion;
+  ui_state.value.versionData.helperVersion = response.data.helperVersion;
+  ui_state.value.versionData.download_url = response.data.download_url;
+  ui_state.value.versionData.service_download_url = response.data.service_download_url;
+  ui_state.value.versionData.helper_download_url = response.data.helper_download_url;
+  
   checkConfigFile()
 
   window.electron.ipcRenderer.on('darnConfigUpdateState', (_event) => {
@@ -159,8 +195,34 @@ onMounted(async () => {
     ui_state.value.download.progress = progress
   })
   window.electron.ipcRenderer.on('darnError', (_event, error: string) => {
-    ElMessage.error(error)
+    ElMessage({
+      type: 'error',
+      duration: 15000,
+      showClose: true,
+      message: error,
+    });
+    ui_state.value.errors = true;
   })
+  window.electron.ipcRenderer.on('darnSuccess', (_event, error: string) => {
+    ElMessage({
+      type: 'success',
+      duration: 15000,
+      showClose: true,
+      message: error,
+    });
+  })
+  window.electron.ipcRenderer.on('darnInfo', (_event, info: string) => {
+    ElMessage({
+      type: 'info',
+      duration: 15000,
+      showClose: true,
+      message: info,
+    });
+  })
+  window.electron.ipcRenderer.on('darnUpdaterDownloadProgress', (_event, percent) => {
+    ui_state.value.download.updaterUpdateProgress = percent;
+  })
+  
 
   //
   console.log(ui_state)
@@ -168,22 +230,32 @@ onMounted(async () => {
 
 async function darnKeyInserted(file): Promise<void> {
   ui_state.value.keyPath = file.raw.path as string
+  ui_state.value.updatedKey = true;
   console.log(ui_state.value)
 }
 
 async function darnStartDownloading(): Promise<void> {
-  const hash = await window.electron.ipcRenderer.invoke(
+  if (ui_state.value.download.updaterUpdateProgress != null) return;
+  await window.electron.ipcRenderer.invoke(
     'darnStartDownloading',
-    ui_state.value.versionData.download_url,
-    ui_state.value.versionData.version[1],
-    ui_state.value.keyPath
+    {
+      url: ui_state.value.versionData.download_url,
+      service_url: ui_state.value.versionData.service_download_url,
+      helper_url: ui_state.value.versionData.helper_download_url,
+
+      version: ui_state.value.versionData.version[1],
+      serviceVersion: ui_state.value.versionData.serviceVersion,
+      helperVersion: ui_state.value.versionData.helperVersion,
+
+      connectionTokenUrl: ui_state.value.keyPath,
+      isKeyUpdated: ui_state.value.updatedKey,
+    }
   )
-  console.log(hash)
 }
 
 async function checkConfigFile(): Promise<void> {
   const darnConfig = await window.electron.ipcRenderer.invoke('darnConfigExists')
-  console.log('darnConfig', darnConfig)
+  console.log('darnConfig', darnConfig, ui_state.value.versionData.version)
   ui_state.value.keyPath = darnConfig?.token
   if (darnConfig.config) {
     ui_state.value.configFileStatus = UpdaterStatus.UpToDate
@@ -195,13 +267,18 @@ async function checkConfigFile(): Promise<void> {
     return
   }
   if (
-    darnConfig.app >= ui_state.value.versionData.version[0] &&
-    darnConfig.app <= ui_state.value.versionData.version[1]
+    (darnConfig.app >= ui_state.value.versionData.version[0] &&
+    darnConfig.app <= ui_state.value.versionData.version[1]) && 
+    (darnConfig.serviceVersion >= ui_state.value.versionData.serviceVersion) &&
+    (darnConfig.helperVersion >= ui_state.value.versionData.helperVersion)
   ) {
     ui_state.value.status = UpdaterStatus.UpToDate
   } else {
     ui_state.value.status = UpdaterStatus.ReadyToUpdate
   }
+}
+function openPolicies() {
+  window.electron.ipcRenderer.invoke('openLink', 'https://darnsoft.com/policies');
 }
 </script>
 
@@ -214,8 +291,10 @@ body {
   display: flex;
   justify-content: center;
 }
-#app {
+* {
   font-family: Avenir, Helvetica, Arial, sans-serif;
+}
+#app {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-align: center;
@@ -276,5 +355,11 @@ h2 {
   text-align: center;
   display: flex;
   transform: translateX(-50%);
+}
+.darn-warning {
+  display: block;
+  font-size: 13px;
+  padding-bottom: 20px;
+  color: var(--el-color-danger);
 }
 </style>

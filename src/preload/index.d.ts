@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { ElectronAPI } from '@electron-toolkit/preload'
+import { ElectronAPI } from "@electron-toolkit/preload";
 
 declare global {
   interface Window {
-    electron: ElectronAPI
+    electron: ElectronAPI;
     api: {
-      getQuery: (url: string, params: any) => AxiosResponse
-    }
+      getQuery: (url: string, params: any) => AxiosResponse;
+    };
   }
 }
